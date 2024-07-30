@@ -1,0 +1,139 @@
+swagger: "2.0"
+info:
+  version: "1.0"
+  title: "billing-api"
+basePath: "/Dev"
+schemes:
+- "https"
+securityDefinitions:
+  CognitoAuth:
+    type: apiKey
+    name: Authorization
+    in: header
+    x-amazon-apigateway-authtype: cognito_user_pools
+    x-amazon-apigateway-authorizer:
+      type: cognito_user_pools
+      providerARNs:
+        - "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/us-east-2_cPVQYv5Q0"
+paths:
+  /billing/invoices:
+    post:
+      security:
+        - CognitoAuth: [ ]
+      consumes:
+        - "application/json"
+      produces:
+        - "application/json"
+      responses: { }
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        credentials:
+          Fn::GetAtt: [ ApiGwExecutionRole, Arn ]
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateInvoice.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+      x-amazon-apigateway-cors:
+        allowOrigins:
+          - "*"
+        allowMethods:
+          - "OPTIONS"
+          - "POST"
+        allowHeaders:
+          - "Content-Type"
+          - "Authorization"
+    get:
+      security:
+        - CognitoAuth: [ ]
+      produces:
+        - "application/json"
+      responses: { }
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        credentials:
+          Fn::GetAtt: [ ApiGwExecutionRole, Arn ]
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetInvoices.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+      x-amazon-apigateway-cors:
+        allowOrigins:
+          - "*"
+        allowMethods:
+          - "OPTIONS"
+          - "GET"
+        allowHeaders:
+          - "Content-Type"
+          - "Authorization"
+  /billing/invoices/{invoice_id}:
+    get:
+      security:
+        - CognitoAuth: [ ]
+      produces:
+        - "application/json"
+      responses: { }
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        credentials:
+          Fn::GetAtt: [ ApiGwExecutionRole, Arn ]
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetInvoice.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+      x-amazon-apigateway-cors:
+        allowOrigins:
+          - "*"
+        allowMethods:
+          - "OPTIONS"
+          - "GET"
+        allowHeaders:
+          - "Content-Type"
+          - "Authorization"
+    put:
+      security:
+        - CognitoAuth: [ ]
+      consumes:
+        - "application/json"
+      produces:
+        - "application/json"
+      responses: { }
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        credentials:
+          Fn::GetAtt: [ ApiGwExecutionRole, Arn ]
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdateInvoice.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+      x-amazon-apigateway-cors:
+        allowOrigins:
+          - "*"
+        allowMethods:
+          - "OPTIONS"
+          - "PUT"
+        allowHeaders:
+          - "Content-Type"
+          - "Authorization"
+    delete:
+      security:
+        - CognitoAuth: [ ]
+      produces:
+        - "application/json"
+      responses: { }
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        credentials:
+          Fn::GetAtt: [ ApiGwExecutionRole, Arn ]
+        httpMethod: POST
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteInvoice.Arn}/invocations
+        passthroughBehavior: "when_no_match"
+      x-amazon-apigateway-cors:
+        allowOrigins:
+          - "*"
+        allowMethods:
+          - "OPTIONS"
+          - "DELETE"
+        allowHeaders:
+          - "Content-Type"
+          - "Authorization"

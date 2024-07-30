@@ -1,57 +1,163 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  billing-app
 
-  Sample SAM Template for billing-app
-
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
-Globals:
-  Function:
-    Timeout: 3
-
-    # You can add LoggingConfig parameters such as the Logformat, Log Group, and SystemLogLevel or ApplicationLogLevel. Learn more here https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html#sam-function-loggingconfig.
-    LoggingConfig:
-      LogFormat: JSON
 Resources:
-  HelloWorldFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+  BillingApi:
+    Type: AWS::Serverless::Api
     Properties:
-      CodeUri: hello_world/
-      Handler: app.lambda_handler
-      Runtime: python3.12
-      Architectures:
-      - x86_64
-      Events:
-        HelloWorld:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          Properties:
-            Path: /hello
-            Method: get
+      Name: !Sub
+        - ${ResourceName} From Stack ${AWS::StackName}
+        - ResourceName: BillingApi
+      StageName: Dev
+      DefinitionBody:
+        'Fn::Transform':
+          Name: 'AWS::Include'
+          Parameters:
+            Location: './api.yaml'
+      EndpointConfiguration: REGIONAL
+      TracingEnabled: true
+      Cors:
+        AllowMethods: "'POST, GET, PUT, DELETE'"
+        AllowHeaders: "'X-Forwarded-For', 'X-Webhook-Secret'"
+        AllowOrigin: "'*'"
+        MaxAge: "'600'"
 
-  ApplicationResourceGroup:
-    Type: AWS::ResourceGroups::Group
+  CreateInvoice:
+    Type: AWS::Serverless::Function
     Properties:
-      Name:
-        Fn::Sub: ApplicationInsights-SAM-${AWS::StackName}
-      ResourceQuery:
-        Type: CLOUDFORMATION_STACK_1_0
-  ApplicationInsightsMonitoring:
-    Type: AWS::ApplicationInsights::Application
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: CreateInvoice
+      CodeUri: src/billing-api/functions/create-invoice/
+      Handler: app.handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      Tracing: Active
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - logs:*
+            Resource: "*"
+        - Statement:
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+
+  GetInvoices:
+    Type: AWS::Serverless::Function
     Properties:
-      ResourceGroupName:
-        Ref: ApplicationResourceGroup
-      AutoConfigurationEnabled: 'true'
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: GetInvoices
+      CodeUri: src/billing-api/functions/get-all-invoices/
+      Handler: app.handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      Tracing: Active
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - logs:*
+            Resource: "*"
+        - Statement:
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+
+  GetInvoice:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: GetInvoice
+      CodeUri: src/billing-api/functions/get-invoice/
+      Handler: app.handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      Tracing: Active
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - logs:*
+            Resource: "*"
+        - Statement:
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+
+  UpdateInvoice:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: UpdateInvoice
+      CodeUri: src/billing-api/functions/update-invoice/
+      Handler: app.handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      Tracing: Active
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - logs:*
+            Resource: "*"
+        - Statement:
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+
+  DeleteInvoice:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: !Sub
+        - Stack ${AWS::StackName} Function ${ResourceName}
+        - ResourceName: DeleteInvoice
+      CodeUri: src/billing-api/functions/delete-invoice/
+      Handler: app.handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      Tracing: Active
+      Policies:
+        - Statement:
+            Effect: Allow
+            Action:
+              - logs:*
+            Resource: "*"
+        - Statement:
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+
 Outputs:
-  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
-  # Find out more about other implicit resources you can reference within SAM
-  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
-  HelloWorldApi:
-    Description: API Gateway endpoint URL for Prod stage for Hello World function
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/hello/"
-  HelloWorldFunction:
-    Description: Hello World Lambda Function ARN
-    Value: !GetAtt HelloWorldFunction.Arn
-  HelloWorldFunctionIamRole:
-    Description: Implicit IAM Role created for Hello World function
-    Value: !GetAtt HelloWorldFunctionRole.Arn
+  BillingApi:
+    Description: "API Gateway endpoint URL for Dev stage for Billing API"
+    Value: !Sub "https://${BillingApi}.execute-api.${AWS::Region}.amazonaws.com/Dev/billing"
+  CreateInvoice:
+    Description: "CreateInvoice Lambda Function ARN"
+    Value: !GetAtt CreateInvoice.Arn
+  GetInvoices:
+    Description: "GetInvoices Lambda Function ARN"
+    Value: !GetAtt GetInvoices.Arn
+  GetInvoice:
+    Description: "GetInvoice Lambda Function ARN"
+    Value: !GetAtt GetInvoice.Arn
+  UpdateInvoice:
+    Description: "UpdateInvoice Lambda Function ARN"
+    Value: !GetAtt UpdateInvoice.Arn
+  DeleteInvoice:
+    Description: "DeleteInvoice Lambda Function ARN"
+    Value: !GetAtt DeleteInvoice.Arn
