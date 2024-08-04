@@ -2,6 +2,47 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
+  ApiGwExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "apigateway.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "ApiGwExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "LambdaExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:*"
+                  - "secretsmanager:GetSecretValue"
+                Resource: "*"
+
   BillingApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -34,17 +75,7 @@ Resources:
       MemorySize: 128
       Timeout: 60
       Tracing: Active
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - logs:*
-            Resource: "*"
-        - Statement:
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+      Role: !GetAtt LambdaExecutionRole.Arn
 
   GetInvoices:
     Type: AWS::Serverless::Function
@@ -58,17 +89,7 @@ Resources:
       MemorySize: 128
       Timeout: 60
       Tracing: Active
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - logs:*
-            Resource: "*"
-        - Statement:
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+      Role: !GetAtt LambdaExecutionRole.Arn
 
   GetInvoice:
     Type: AWS::Serverless::Function
@@ -82,17 +103,7 @@ Resources:
       MemorySize: 128
       Timeout: 60
       Tracing: Active
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - logs:*
-            Resource: "*"
-        - Statement:
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+      Role: !GetAtt LambdaExecutionRole.Arn
 
   UpdateInvoice:
     Type: AWS::Serverless::Function
@@ -106,17 +117,7 @@ Resources:
       MemorySize: 128
       Timeout: 60
       Tracing: Active
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - logs:*
-            Resource: "*"
-        - Statement:
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+      Role: !GetAtt LambdaExecutionRole.Arn
 
   DeleteInvoice:
     Type: AWS::Serverless::Function
@@ -130,17 +131,7 @@ Resources:
       MemorySize: 128
       Timeout: 60
       Tracing: Active
-      Policies:
-        - Statement:
-            Effect: Allow
-            Action:
-              - logs:*
-            Resource: "*"
-        - Statement:
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-            Resource: arn:aws:secretsmanager:us-east-2:YOUR_ACCOUNT_ID:secret:infra-revelium-mongo-SzisXB
+      Role: !GetAtt LambdaExecutionRole.Arn
 
 Outputs:
   BillingApi:

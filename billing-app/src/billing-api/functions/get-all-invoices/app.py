@@ -9,6 +9,7 @@ from pymongo.server_api import ServerApi
 import boto3
 from fastapi.responses import JSONResponse
 import requests
+import base64
 
 class InvoiceItem(BaseModel):
     description: str
@@ -21,78 +22,55 @@ class Invoice(BaseModel):
     total: float
     items: list
 
-def get_secret(resource: str):
+
+
+def get_alegra_auth_header(email:str, token:str):
     """
-    Retrieve credentials from AWS Secrets Manager.
+    Generate the Basic Auth header for Alegra API.
 
     Args:
-        resource (str): Indicates the resource from which the secrets will be obtained.
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
+
     Returns:
-        dict: Credentials retrieved from the secret.
-    Raises:
-        HTTPException: If an error occurs while retrieving secrets.
+        str: Basic Auth header value.
     """
-    resources = {
-        "mongodb": "MONGODB_SECRET_NAME",
-        "alegra": "ALEGRA_API_KEY"
-    }
-    secret_name = os.environ[resources.get(resource)]
-    region_name = os.environ["AWS_REGION_NAME"]
-
-    try:
-        session = boto3.session.Session()
-        client = session.client(service_name="secretsmanager", region_name=region_name)
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
-        return json.loads(get_secret_value_response["SecretString"])
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
-
-def database_connection(secrets: dict):
-    """
-    Establish a connection to the MongoDB database.
-
-    Args:
-        secrets (dict): MongoDB credentials.
-    Returns:
-        MongoClient: A MongoDB client.
-    Raises:
-        HTTPException: If an error occurs while connecting to the database.
-    """
-    try:
-        username = secrets["username"]
-        password = secrets["password"]
-        host = os.environ["MONGODB_HOST"]
-
-        connection_string = (
-            f"mongodb+srv://{username}:{password}@{host}/"
-            f"?retryWrites=true&w=majority"
-        )
-        client = MongoClient(connection_string, server_api=ServerApi("1"))
-        return client
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
+    auth_str = f"{email}:{token}"
+    auth_bytes = auth_str.encode('utf-8')
+    auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
+    return f"Basic {auth_base64}"
 
 def get_invoices_from_alegra():
     """
-    Retrieve a list of invoices from Alegra Billing.
+        Retrieve a list of invoices from Alegra Billing.
 
-    Returns:
-        list: List of invoices retrieved from Alegra.
-    """
-    API_URL = "https://api.alegra.com/api/v1/"
-    API_KEY = os.getenv("ALEGRA_API_KEY")
-    url = f"{API_URL}/invoices"
+        Returns:
+            list: List of invoices retrieved from Alegra.
+        """
+    API_URL = "https://api.alegra.com/api/v1/invoices"
+    email = os.getenv("ALEGRA_EMAIL")
+    token = os.getenv("ALEGRA_API_KEY")
+
+    # Get the authorization header
+    auth_header = get_alegra_auth_header(email, token)
+
+    url = API_URL
     headers = {
-        "Authorization": f"Basic {API_KEY}",
+        "Authorization": auth_header,
         "Content-Type": "application/json"
     }
+
+    logging.info(f"Request URL: {url}")
+    logging.info(f"Request Headers: {headers}")
+
     response = requests.get(url, headers=headers)
+
+    logging.info(f"Response Status Code: {response.status_code}")
+    logging.info(f"Response Content: {response.content}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
     return response.json()
 
 def data_response(status_code: int, message: str, extra_data: dict = None):
@@ -123,33 +101,19 @@ def data_response(status_code: int, message: str, extra_data: dict = None):
 
 def get_invoices(event, context):
     """
-    Retrieve a list of invoices from MongoDB and Alegra Billing.
+        Retrieve a list of invoices from Alegra Billing.
 
-    Args:
-        event (dict): The AWS Lambda event object containing request parameters.
-        context (obj): The AWS Lambda context object (not used in this function).
-
-    Returns:
-        dict: Response containing a list of invoices.
-    """
+        Returns:
+            dict: Response containing a list of invoices.
+        """
     try:
-        # Retrieve MongoDB invoices
-        secrets = get_secret("mongodb")
-        client = database_connection(secrets)
-        db = client[os.environ["MONGO_DB_NAME"]]
-        invoices_collection = db.get_collection("invoices")
-        invoices = list(invoices_collection.find())
-
         # Retrieve Alegra invoices
         alegra_invoices = get_invoices_from_alegra()
 
-        combined_invoices = {
-            "mongodb_invoices": invoices,
-            "alegra_invoices": alegra_invoices
-        }
-        return data_response(status_code=status.HTTP_200_OK, message="Invoices retrieved successfully", extra_data=combined_invoices)
+        # Return the invoices as a JSON response
+        return {"message": "Invoices retrieved successfully", "alegra_invoices": alegra_invoices}
     except HTTPException as err:
-        return data_response(status_code=err.status_code, message=err.detail)
+        raise err
     except Exception as err:
         logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(err))
