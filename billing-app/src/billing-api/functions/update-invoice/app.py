@@ -2,14 +2,10 @@ import json
 import logging
 import os
 from datetime import datetime
-from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from bson import ObjectId
-import boto3
-from fastapi.responses import JSONResponse
+import base64
 import requests
+import boto3
 
 
 class InvoiceItem(BaseModel):
@@ -24,84 +20,57 @@ class Invoice(BaseModel):
     total: float
     items: list
 
-
-def get_secret(resource: str):
+def get_alegra_auth_header(email, token):
     """
-    Retrieve credentials from AWS Secrets Manager.
+    Generate the Basic Auth header for Alegra API.
 
     Args:
-        resource (str): Indicates the resource from which the secrets will be obtained.
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
+
     Returns:
-        dict: Credentials retrieved from the secret.
-    Raises:
-        HTTPException: If an error occurs while retrieving secrets.
+        str: Basic Auth header value.
     """
-    resources = {
-        "mongodb": "MONGODB_SECRET_NAME",
-        "alegra": "ALEGRA_API_KEY"
-    }
-    secret_name = os.environ[resources.get(resource)]
-    region_name = os.environ["AWS_REGION_NAME"]
-
-    try:
-        session = boto3.session.Session()
-        client = session.client(service_name="secretsmanager", region_name=region_name)
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
-        return json.loads(get_secret_value_response["SecretString"])
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
+    auth_str = f"{email}:{token}"
+    auth_bytes = auth_str.encode('utf-8')
+    auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
+    return f"Basic {auth_base64}"
 
 
-def database_connection(secrets: dict):
+def get_invoice_details_from_alegra(invoice_id: str):
     """
-    Establish a connection to the MongoDB database.
+    Retrieve the details of a specific invoice from Alegra Billing.
 
     Args:
-        secrets (dict): MongoDB credentials.
+        invoice_id (str): The ID of the invoice to retrieve.
     Returns:
-        MongoClient: A MongoDB client.
-    Raises:
-        HTTPException: If an error occurs while connecting to the database.
+        dict: Details of the invoice retrieved from Alegra.
     """
-    try:
-        username = secrets["username"]
-        password = secrets["password"]
-        host = os.environ["MONGODB_HOST"]
+    API_URL = f"https://api.alegra.com/api/v1/invoices/{invoice_id}"
+    email = os.getenv("ALEGRA_EMAIL")
+    token = os.getenv("ALEGRA_API_KEY")
 
-        connection_string = (
-            f"mongodb+srv://{username}:{password}@{host}/"
-            f"?retryWrites=true&w=majority"
-        )
-        client = MongoClient(connection_string, server_api=ServerApi("1"))
-        return client
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
+    # Get the authorization header
+    auth_header = get_alegra_auth_header(email, token)
 
-
-def update_invoice_in_alegra(invoice_id: str, invoice: dict):
-    """
-    Update an existing invoice in Alegra Billing.
-
-    Args:
-        invoice_id (str): The ID of the invoice to be updated.
-        invoice (dict): Updated invoice data.
-    Returns:
-        dict: The updated invoice details from Alegra.
-    """
-    API_URL = "https://api.alegra.com/api/v1/"
-    API_KEY = os.getenv("ALEGRA_API_KEY")
-    url = f"{API_URL}/invoices/{invoice_id}"
     headers = {
-        "Authorization": f"Basic {API_KEY}",
+        "Authorization": auth_header,
         "Content-Type": "application/json"
     }
-    response = requests.put(url, headers=headers, json=invoice)
+
+    logging.info(f"Request URL: {API_URL}")
+    logging.info(f"Request Headers: {headers}")
+
+    response = requests.get(API_URL, headers=headers)
+
+    logging.info(f"Response Status Code: {response.status_code}")
+    logging.info(f"Response Content: {response.content}")
+
+    if response.status_code == 404:
+        raise Exception("Invoice not found in Alegra")
+    elif response.status_code != 200:
+        raise Exception(f"Failed to retrieve invoice: {response.text}")
+
     return response.json()
 
 
@@ -132,62 +101,28 @@ def data_response(status_code: int, message: str, extra_data: dict = None):
     }
 
 
-def update_invoice(event, context):
+def lambda_handler(event, context):
     """
-    Update an existing invoice in MongoDB and Alegra Billing.
+    Retrieve the details of a specific invoice from Alegra Billing.
 
     Args:
         event (dict): The AWS Lambda event object containing request parameters.
         context (obj): The AWS Lambda context object (not used in this function).
 
     Returns:
-        dict: Response containing the updated invoice details.
+        dict: Response containing the details of the invoice.
     """
     try:
         invoice_id = event["pathParameters"]["invoice_id"]
-        body = json.loads(event["body"])
-        invoice = Invoice(**body)
 
-        # Retrieve MongoDB connection
-        secrets = get_secret("mongodb")
-        client = database_connection(secrets)
-        db = client[os.environ["MONGO_DB_NAME"]]
-        invoices_collection = db.get_collection("invoices")
+        # Retrieve Alegra invoice
+        invoice = get_invoice_details_from_alegra(invoice_id)
 
-        # Update invoice in MongoDB
-        invoice_data = invoice.dict()
-        invoice_data["updated_at"] = datetime.utcnow()
-        update_result = invoices_collection.update_one(
-            {"_id": ObjectId(invoice_id)},
-            {"$set": invoice_data}
-        )
-
-        if update_result.matched_count == 0:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found in MongoDB")
-
-        # Update invoice in Alegra
-        alegra_invoice_data = {
-            "date": invoice.date.strftime("%Y-%m-%d"),
-            "client": invoice.client,
-            "items": [
-                {
-                    "description": item.description,
-                    "quantity": item.quantity,
-                    "price": item.price
-                } for item in invoice.items
-            ],
-            "total": invoice.total
-        }
-        alegra_invoice = update_invoice_in_alegra(invoice_id, alegra_invoice_data)
-
-        return data_response(status_code=status.HTTP_200_OK, message="Invoice updated successfully",
-                             extra_data=alegra_invoice)
+        return data_response(status_code=200, message="Invoice retrieved successfully", extra_data=invoice)
     except ValidationError as err:
         logging.error(err)
         err_msg = ", ".join(f"{error['loc']}: {error['msg']}" for error in err.errors())
-        return data_response(status_code=status.HTTP_400_BAD_REQUEST, message=err_msg)
-    except HTTPException as err:
-        return data_response(status_code=err.status_code, message=err.detail)
+        return data_response(status_code=400, message=err_msg)
     except Exception as err:
         logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
+        return data_response(status_code=500, message=str(err))

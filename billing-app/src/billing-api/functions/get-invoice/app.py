@@ -10,6 +10,7 @@ from bson import ObjectId
 import boto3
 from fastapi.responses import JSONResponse
 import requests
+import base64
 
 
 class InvoiceItem(BaseModel):
@@ -25,84 +26,23 @@ class Invoice(BaseModel):
     items: list
 
 
-def get_secret(resource: str):
+def get_alegra_auth_header(email, token):
     """
-    Retrieve credentials from AWS Secrets Manager.
+    Generate the Basic Auth header for Alegra API.
 
     Args:
-        resource (str): Indicates the resource from which the secrets will be obtained.
-    Returns:
-        dict: Credentials retrieved from the secret.
-    Raises:
-        HTTPException: If an error occurs while retrieving secrets.
-    """
-    resources = {
-        "mongodb": "MONGODB_SECRET_NAME",
-        "alegra": "ALEGRA_API_KEY"
-    }
-    secret_name = os.environ[resources.get(resource)]
-    region_name = os.environ["AWS_REGION_NAME"]
-
-    try:
-        session = boto3.session.Session()
-        client = session.client(service_name="secretsmanager", region_name=region_name)
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
-        return json.loads(get_secret_value_response["SecretString"])
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
-
-
-def database_connection(secrets: dict):
-    """
-    Establish a connection to the MongoDB database.
-
-    Args:
-        secrets (dict): MongoDB credentials.
-    Returns:
-        MongoClient: A MongoDB client.
-    Raises:
-        HTTPException: If an error occurs while connecting to the database.
-    """
-    try:
-        username = secrets["username"]
-        password = secrets["password"]
-        host = os.environ["MONGODB_HOST"]
-
-        connection_string = (
-            f"mongodb+srv://{username}:{password}@{host}/"
-            f"?retryWrites=true&w=majority"
-        )
-        client = MongoClient(connection_string, server_api=ServerApi("1"))
-        return client
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_424_FAILED_DEPENDENCY, detail=str(err)
-        )
-
-
-def get_invoices_from_alegra():
-    """
-    Retrieve a list of invoices from Alegra Billing.
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
 
     Returns:
-        list: List of invoices retrieved from Alegra.
+        str: Basic Auth header value.
     """
-    API_URL = "https://api.alegra.com/api/v1/"
-    API_KEY = os.getenv("ALEGRA_API_KEY")
-    url = f"{API_URL}/invoices"
-    headers = {
-        "Authorization": f"Basic {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    response = requests.get(url, headers=headers)
-    return response.json()
+    auth_str = f"{email}:{token}"
+    auth_bytes = auth_str.encode('utf-8')
+    auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
+    return f"Basic {auth_base64}"
 
-
-def get_invoice_details_from_alegra(invoice_id: str):
+def get_invoices_from_alegra(invoice_id: str):
     """
     Retrieve the details of a specific invoice from Alegra Billing.
 
@@ -111,17 +51,33 @@ def get_invoice_details_from_alegra(invoice_id: str):
     Returns:
         dict: Details of the invoice retrieved from Alegra.
     """
-    API_URL = "https://api.alegra.com/api/v1/"
-    API_KEY = os.getenv("ALEGRA_API_KEY")
-    url = f"{API_URL}/invoices/{invoice_id}"
+    API_URL = f"https://api.alegra.com/api/v1/invoices/{invoice_id}"
+    email = os.getenv("ALEGRA_EMAIL")
+    token = os.getenv("ALEGRA_API_KEY")
+
+    # Get the authorization header
+    auth_header = get_alegra_auth_header(email, token)
+
     headers = {
-        "Authorization": f"Basic {API_KEY}",
+        "Authorization": auth_header,
         "Content-Type": "application/json"
     }
-    response = requests.get(url, headers=headers)
+
+    logging.info(f"Request URL: {API_URL}")
+    logging.info(f"Request Headers: {headers}")
+
+    response = requests.get(API_URL, headers=headers)
+
+    logging.info(f"Response Status Code: {response.status_code}")
+    logging.info(f"Response Content: {response.content}")
+
     if response.status_code == 404:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found in Alegra")
+    elif response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
     return response.json()
+
 
 
 def data_response(status_code: int, message: str, extra_data: dict = None):
@@ -151,34 +107,23 @@ def data_response(status_code: int, message: str, extra_data: dict = None):
     }
 
 def get_invoice(event, context):
-    """
-    Retrieve the details of a specific invoice from MongoDB and Alegra Billing.
+        """
+        Retrieve the details of a specific invoice from Alegra Billing.
 
-    Args:
-        event (dict): The AWS Lambda event object containing request parameters.
-        context (obj): The AWS Lambda context object (not used in this function).
+        Args:
+            invoice_id (str): The ID of the invoice to retrieve.
 
-    Returns:
-        dict: Response containing the details of the invoice.
-    """
-    try:
-        invoice_id = event["pathParameters"]["invoice_id"]
+        Returns:
+            dict: Response containing the details of the invoice.
+        """
+        try:
+            # Retrieve Alegra invoice
+            invoice = get_invoices_from_alegra(invoice_id)
 
-        # Retrieve MongoDB invoice
-        secrets = get_secret("mongodb")
-        client = database_connection(secrets)
-        db = client[os.environ["MONGO_DB_NAME"]]
-        invoices_collection = db.get_collection("invoices")
-        invoice = invoices_collection.find_one({"_id": ObjectId(invoice_id)})
-
-        if not invoice:
-            # Retrieve Alegra invoice if not found in MongoDB
-            invoice = get_invoice_details_from_alegra(invoice_id)
-
-        return data_response(status_code=status.HTTP_200_OK, message="Invoice retrieved successfully",
-                             extra_data=invoice)
-    except HTTPException as err:
-        return data_response(status_code=err.status_code, message=err.detail)
-    except Exception as err:
-        logging.error(f"Unexpected error: {str(err)}", exc_info=True)
-        return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
+            return data_response(status_code=status.HTTP_200_OK, message="Invoice retrieved successfully",
+                                 extra_data=invoice)
+        except HTTPException as err:
+            return data_response(status_code=err.status_code, message=err.detail)
+        except Exception as err:
+            logging.error(f"Unexpected error: {str(err)}", exc_info=True)
+            return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
