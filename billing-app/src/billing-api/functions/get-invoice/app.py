@@ -118,7 +118,7 @@ def get_invoice(event, context):
         """
         try:
             # Retrieve Alegra invoice
-            invoice = get_invoices_from_alegra(invoice_id)
+            invoice = get_invoices_from_alegra()
 
             return data_response(status_code=status.HTTP_200_OK, message="Invoice retrieved successfully",
                                  extra_data=invoice)

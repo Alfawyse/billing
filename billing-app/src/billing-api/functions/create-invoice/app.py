@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import base64
 from datetime import datetime
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
@@ -8,21 +9,40 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from bson import ObjectId
 import boto3
-from fastapi.responses import JSONResponse
 import requests
 
 
 class InvoiceItem(BaseModel):
-    description: str
-    quantity: int
+    id: int
+    name: str
+    discount: int
     price: float
+    quantity: int
+
+
+class Payment(BaseModel):
+    date: datetime
+    amount: float
+    paymentMethod: str
 
 
 class Invoice(BaseModel):
-    client: str
+    client: dict
+    paymentForm: str
+    items: list[InvoiceItem]
+    payments: list[Payment]
+    dueDate: datetime
     date: datetime
-    total: float
-    items: list
+
+
+class Contact(BaseModel):
+    nameObject: dict
+    identificationObject: dict
+    kindOfPerson: str
+    regime: str
+    name: str
+    mobile: str
+    email: str
 
 
 def get_secret(resource: str):
@@ -31,14 +51,15 @@ def get_secret(resource: str):
 
     Args:
         resource (str): Indicates the resource from which the secrets will be obtained.
+
     Returns:
         dict: Credentials retrieved from the secret.
+
     Raises:
         HTTPException: If an error occurs while retrieving secrets.
     """
     resources = {
-        "mongodb": "MONGODB_SECRET_NAME",
-        "alegra": "ALEGRA_API_KEY"
+        "mongodb": "MONGODB_SECRET_NAME"
     }
     secret_name = os.environ[resources.get(resource)]
     region_name = os.environ["AWS_REGION_NAME"]
@@ -61,8 +82,10 @@ def database_connection(secrets: dict):
 
     Args:
         secrets (dict): MongoDB credentials.
+
     Returns:
         MongoClient: A MongoDB client.
+
     Raises:
         HTTPException: If an error occurs while connecting to the database.
     """
@@ -84,23 +107,64 @@ def database_connection(secrets: dict):
         )
 
 
-def create_invoice_in_alegra(invoice: dict):
+def get_alegra_auth_header(email: str, token: str):
     """
-    Create a new invoice in Alegra Billing.
+    Generate the Basic Auth header for Alegra API.
+
+    Args:
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
+
+    Returns:
+        str: Basic Auth header value.
+    """
+    auth_str = f"{email}:{token}"
+    auth_bytes = auth_str.encode('utf-8')
+    auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
+    return f"Basic {auth_base64}"
+
+
+def create_contact_in_alegra(contact_data: dict, email: str, token: str):
+    """
+    Create a new contact in Alegra.
+
+    Args:
+        contact_data (dict): Contact data to be created in Alegra.
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
+
+    Returns:
+        dict: The created contact details from Alegra.
+    """
+    API_URL = "https://api.alegra.com/api/v1/contacts"
+    headers = {
+        "Authorization": get_alegra_auth_header(email, token),
+        "Content-Type": "application/json"
+    }
+    response = requests.post(API_URL, headers=headers, json=contact_data)
+    response.raise_for_status()  # Raise an exception for HTTP errors
+    return response.json()
+
+
+def create_invoice_in_alegra(invoice: dict, email: str, token: str):
+    """
+    Create a new invoice in Alegra.
 
     Args:
         invoice (dict): Invoice data to be created in Alegra.
+        email (str): User email for Alegra.
+        token (str): API token for Alegra.
+
     Returns:
         dict: The created invoice details from Alegra.
     """
-    API_URL = "https://api.alegra.com/api/v1/"
-    API_KEY = os.getenv("ALEGRA_API_KEY")
-    url = f"{API_URL}/invoices"
+    API_URL = "https://api.alegra.com/api/v1/invoices"
     headers = {
-        "Authorization": f"Basic {API_KEY}",
+        "Authorization": get_alegra_auth_header(email, token),
         "Content-Type": "application/json"
     }
-    response = requests.post(url, headers=headers, json=invoice)
+    response = requests.post(API_URL, headers=headers, json=invoice)
+    response.raise_for_status()  # Raise an exception for HTTP errors
     return response.json()
 
 
@@ -144,15 +208,46 @@ def create_invoice(event, context):
     """
     try:
         body = json.loads(event["body"])
-        invoice = Invoice(**body)
+
+        # Extract contact data
+        contact_data = body.get("contact")
+        if not contact_data:
+            raise ValidationError("Contact data is missing")
+
+        contact = Contact(**contact_data)
+
+        # Extract invoice data
+        invoice_data = body.get("invoice")
+        if not invoice_data:
+            raise ValidationError("Invoice data is missing")
+
+        invoice = Invoice(**invoice_data)
+
+        # Alegra credentials
+        alegra_email = os.getenv("ALEGRA_EMAIL")
+        alegra_token = os.getenv("ALEGRA_API_TOKEN")
+
+        # Create contact in Alegra
+        alegra_contact = create_contact_in_alegra(contact.dict(), alegra_email, alegra_token)
+        alegra_contact_id = alegra_contact["id"]
 
         # Retrieve MongoDB connection
         secrets = get_secret("mongodb")
         client = database_connection(secrets)
         db = client[os.environ["MONGO_DB_NAME"]]
-        invoices_collection = db.get_collection("invoices")
+        contacts_collection = db.get_collection("contacts")
+
+        # Save contact ID in MongoDB
+        contact_data["_id"] = alegra_contact_id
+        contact_data["created_at"] = datetime.utcnow()
+        contact_data["updated_at"] = datetime.utcnow()
+        contacts_collection.insert_one(contact_data)
+
+        # Update invoice data with Alegra contact ID
+        invoice.client = {"id": alegra_contact_id}
 
         # Create invoice in MongoDB
+        invoices_collection = db.get_collection("invoices")
         invoice_data = invoice.dict()
         invoice_data["_id"] = str(ObjectId())
         invoice_data["created_at"] = datetime.utcnow()
@@ -160,19 +255,7 @@ def create_invoice(event, context):
         invoices_collection.insert_one(invoice_data)
 
         # Create invoice in Alegra
-        alegra_invoice_data = {
-            "date": invoice.date.strftime("%Y-%m-%d"),
-            "client": invoice.client,
-            "items": [
-                {
-                    "description": item.description,
-                    "quantity": item.quantity,
-                    "price": item.price
-                } for item in invoice.items
-            ],
-            "total": invoice.total
-        }
-        alegra_invoice = create_invoice_in_alegra(alegra_invoice_data)
+        alegra_invoice = create_invoice_in_alegra(invoice.dict(), alegra_email, alegra_token)
 
         return data_response(status_code=status.HTTP_201_CREATED, message="Invoice created successfully",
                              extra_data=alegra_invoice)
@@ -182,6 +265,9 @@ def create_invoice(event, context):
         return data_response(status_code=status.HTTP_400_BAD_REQUEST, message=err_msg)
     except HTTPException as err:
         return data_response(status_code=err.status_code, message=err.detail)
+    except requests.exceptions.RequestException as err:
+        logging.error(f"HTTP error: {str(err)}", exc_info=True)
+        return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
     except Exception as err:
         logging.error(f"Unexpected error: {str(err)}", exc_info=True)
         return data_response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=str(err))
